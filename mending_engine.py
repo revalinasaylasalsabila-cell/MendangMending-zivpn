@@ -549,6 +549,12 @@ def process_user(name, u, db):
 
             if close_reason:
                 close_side = 'sell' if side_pos == 'LONG' else 'buy'
+                # Cancel semua open order TP/SL yang masih ada di exchange
+                try:
+                    ex.cancel_all_orders(pair)
+                    log(f"[{name}] All open TP/SL orders cancelled.")
+                except Exception as e:
+                    log(f"[{name}] Cancel orders warning: {e}")
                 ex.create_market_order(pair, close_side, amount,
                                        params={'reduceOnly': True})
                 # Update DB
@@ -609,14 +615,45 @@ def process_user(name, u, db):
         sl_dist  = abs(curr_price - sl)
         qty      = calc_qty(cap, risk, sl_dist, lev, curr_price)
 
-        # Eksekusi order
+        # Eksekusi order market entry
         ex.create_market_order(pair, signal, qty)
+        log(f"[{name}] OPEN {signal.upper()} {pair} qty={qty} "
+            f"entry={curr_price} TP={tp} SL={sl} str={strength}")
+
+        # Pasang SL dan TP sebagai order langsung di Binance
+        sl_side = 'sell' if signal == 'buy' else 'buy'
+        try:
+            # Pasang Stop Loss order di exchange
+            ex.create_order(
+                pair, 'stop_market', sl_side, qty,
+                params={
+                    'stopPrice': round(sl, 2),
+                    'reduceOnly': True,
+                    'closePosition': True,
+                }
+            )
+            log(f"[{name}] SL ORDER PLACED @ {sl:.4f}")
+        except Exception as e:
+            log(f"[{name}] SL ORDER FAILED: {e}")
+
+        try:
+            # Pasang Take Profit order di exchange
+            ex.create_order(
+                pair, 'take_profit_market', sl_side, qty,
+                params={
+                    'stopPrice': round(tp, 2),
+                    'reduceOnly': True,
+                    'closePosition': True,
+                }
+            )
+            log(f"[{name}] TP ORDER PLACED @ {tp:.4f}")
+        except Exception as e:
+            log(f"[{name}] TP ORDER FAILED: {e}")
+
         _open_trade_data[name] = {
             'side': signal, 'entry': curr_price,
             'tp': tp, 'sl': sl, 'qty': qty
         }
-        log(f"[{name}] OPEN {signal.upper()} {pair} qty={qty} "
-            f"entry={curr_price} TP={tp} SL={sl} str={strength}")
 
         msg = (
             f"🚀 OPEN <b>{signal.upper()}</b> — {name}\n"
@@ -627,7 +664,8 @@ def process_user(name, u, db):
             f"🎯 Entry    : {curr_price:.4f}\n"
             f"✅ TP       : {tp:.4f}\n"
             f"🛑 SL       : {sl:.4f}\n"
-            f"📐 R:R      : 1:2.0"
+            f"📐 R:R      : 1:2.0\n"
+            f"🔒 TP/SL dipasang otomatis di Binance"
         )
         tele(msg)
 
